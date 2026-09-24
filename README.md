@@ -1,21 +1,56 @@
 # job-agent
 
-基于 LangChain 的远程职位查询 Agent，通过 FastAPI 提供 HTTP 接口。
+A LangChain-based agent for finding remote jobs, exposed through a FastAPI HTTP API.
 
-## 本地运行
+## Run Locally
 
-在项目根目录、激活虚拟环境后执行：
+Activate your virtual environment, then run the following commands from the project root:
 
 ```bash
 python -m pip install -r requirements.txt
 python -m uvicorn app.main:app --reload
 ```
 
-在本地 `.env` 中配置模型凭据（例如 `GOOGLE_API_KEY`）。`.env` 已被 Git 忽略，请勿提交。
+Configure model credentials (such as `GOOGLE_API_KEY`) in your local `.env` file. The `.env` file is ignored by Git; do not commit it.
 
-接口文档：http://127.0.0.1:8000/docs
+### PostgreSQL
 
-## 查询 Agent
+Start a local database before starting the API (requires Docker):
+
+```bash
+docker compose up -d postgres
+```
+
+Add the following to your existing `.env` file; see `.env.example` for a template:
+
+```dotenv
+DATABASE_URL=postgresql://job_agent:job_agent_local@localhost:5432/job_agent
+```
+
+These credentials are for local development only. For an existing PostgreSQL
+server, set `DATABASE_URL` to its connection URL instead. The API creates the
+`jobs` table at startup; the database user needs permission to create tables.
+Startup fails if the database is unavailable or the URL is missing.
+
+Every job in each Himalayas search response is saved before the first ten are
+returned to the model. This does not fetch additional pages automatically.
+The table stores title, company, application URL, the complete provider payload
+in `raw_data` (JSONB), and first/last seen timestamps. Jobs are deduplicated by
+provider ID, GUID, slug, or application URL, in that order. If none is available,
+a hash of the complete payload is used; changes to such a payload create a new row.
+Repeated searches update existing records. A failed batch is rolled back and
+the API returns HTTP 503 if job storage fails. Saved jobs remain available even
+if a later model call fails. Docker stores the database in a persistent volume.
+
+Inspect saved jobs:
+
+```bash
+docker compose exec postgres psql -U job_agent -d job_agent -c 'SELECT id, title, company, apply_url FROM jobs ORDER BY last_seen_at DESC LIMIT 20;'
+```
+
+API documentation: http://127.0.0.1:8000/docs
+
+## Query the Agent
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/agent \
@@ -23,21 +58,24 @@ curl -X POST http://127.0.0.1:8000/api/agent \
   -d '{"prompt":"Find senior backend engineer jobs that hire worldwide."}'
 ```
 
-成功响应：
+Successful response:
 
 ```json
-{"answer":"Agent 返回的职位推荐文本"}
+{"answer":"Job recommendations returned by the agent"}
 ```
 
-接口等待 Agent 执行完成后返回最终文本，不返回内部工具调用消息。
-`prompt` 去掉首尾空白后必须为 1–10000 个字符。参数不合法返回 422；
-Agent 调用失败或没有返回文本时返回 502。当前接口未配置身份认证，默认本地运行。
+The API waits for the agent to finish and returns its final text response, excluding internal tool-call messages.
+After trimming leading and trailing whitespace, `prompt` must contain 1–10,000 characters. Invalid input returns HTTP 422.
+If the agent call fails or returns no text, the API returns HTTP 502. Authentication is not currently configured, and the API runs locally by default.
 
-## 测试
+## Tests
 
 ```bash
 python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 ```
 
-接口测试模拟 Agent 返回值，不调用真实模型或职位 API。
+API tests mock the agent's responses and do not call real models or job APIs.
+To also run the PostgreSQL integration test, set `TEST_DATABASE_URL` to a test
+database connection URL before running the test suite. This test creates the
+table if needed and removes its own test records afterward.

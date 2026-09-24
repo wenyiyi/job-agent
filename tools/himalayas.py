@@ -1,5 +1,7 @@
 import requests
 
+from app.database import save_jobs
+
 # tool   himalayas
 def get_himalayas_job(query: str) -> list[dict]:
     """Search real remote jobs from Himalayas."""
@@ -16,6 +18,7 @@ def get_himalayas_job(query: str) -> list[dict]:
 
     data = response.json()
     jobs = data.get("jobs", [])
+    save_jobs(jobs)
     results = []
     for job in jobs[:10]:
         results.append(

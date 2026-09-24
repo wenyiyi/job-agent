@@ -1,12 +1,22 @@
 import logging
+from contextlib import asynccontextmanager
+
+from starlette.concurrency import run_in_threadpool
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent.workflow import run_job_agent
+from app.database import JobStorageError, init_database
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await run_in_threadpool(init_database)
+    yield
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="Job Agent API")
+app = FastAPI(title="Job Agent API", lifespan=lifespan)
 
 
 class AgentRequest(BaseModel):
@@ -37,6 +47,11 @@ def query_agent(request: AgentRequest) -> AgentResponse:
         if not answer.strip():
             raise ValueError("Agent returned no text")
         return AgentResponse(answer=answer)
+    except JobStorageError as exc:
+        logger.error("Job persistence failed")
+        raise HTTPException(
+            status_code=503, detail="Unable to save jobs. Please try again later."
+        ) from exc
     except Exception as exc:
         # Do not expose upstream errors, credentials or prompts in the response.
         logger.error("Agent request failed (%s)", type(exc).__name__)
