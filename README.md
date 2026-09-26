@@ -50,6 +50,18 @@ docker compose exec postgres psql -U job_agent -d job_agent -c 'SELECT id, title
 
 API documentation: http://127.0.0.1:8000/docs
 
+## Browse Saved Jobs
+
+Open http://127.0.0.1:8000/ after starting PostgreSQL and FastAPI.
+The responsive jobs page supports title/company search, pagination, job details,
+and links to the original application pages. Use **Refresh** to load newly saved
+jobs. Browsing only reads saved records; it does not trigger an agent search.
+The frontend is served by FastAPI and requires no Node.js build or separate server.
+
+The underlying read endpoint is `GET /api/jobs?q=backend&page=1&page_size=20`.
+It returns `items`, `total`, `page`, and `page_size`, ordered by latest update.
+Page sizes range from 1 to 100. Database read failures return HTTP 503.
+
 ## Query the Agent
 
 ```bash

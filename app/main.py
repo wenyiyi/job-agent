@@ -1,13 +1,16 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from starlette.concurrency import run_in_threadpool
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent.workflow import run_job_agent
-from app.database import JobStorageError, init_database
+from app.database import JobStorageError, init_database, list_jobs
 
 
 @asynccontextmanager
@@ -17,6 +20,24 @@ async def lifespan(app: FastAPI):
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Job Agent API", lifespan=lifespan)
+static_dir = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+
+@app.get("/", include_in_schema=False)
+def home():
+    return FileResponse(static_dir / "index.html")
+
+
+@app.get("/api/jobs")
+def saved_jobs(q: str = Query("", max_length=200),
+               page: int = Query(1, ge=1),
+               page_size: int = Query(20, ge=1, le=100)):
+    try:
+        return list_jobs(q.strip(), page, page_size)
+    except JobStorageError as exc:
+        logger.error("Unable to read saved jobs")
+        raise HTTPException(status_code=503, detail="暂时无法读取岗位，请稍后重试。") from exc
 
 
 class AgentRequest(BaseModel):

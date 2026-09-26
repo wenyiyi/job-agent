@@ -6,6 +6,7 @@ import os
 
 import psycopg
 from psycopg.types.json import Jsonb
+from psycopg.rows import dict_row
 
 from app.config import init_config
 
@@ -49,6 +50,29 @@ def job_key(job: dict) -> str:
     # distinct positions with the same title and company.
     payload = json.dumps(job, sort_keys=True, ensure_ascii=False)
     return "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
+
+
+def list_jobs(query: str = "", page: int = 1, page_size: int = 20) -> dict:
+    # Escape LIKE metacharacters so user input is treated as a literal search.
+    pattern = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    where = "WHERE COALESCE(title, '') ILIKE %s OR COALESCE(company, '') ILIKE %s"
+    try:
+        with connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                cursor.execute("SELECT COUNT(*) AS total FROM jobs " + where,
+                               (pattern, pattern))
+                total = cursor.fetchone()["total"]
+                cursor.execute(
+                    "SELECT id, title, company, apply_url, source, raw_data, last_seen_at "
+                    "FROM jobs " + where +
+                    " ORDER BY last_seen_at DESC, id DESC LIMIT %s OFFSET %s",
+                    (pattern, pattern, page_size, (page - 1) * page_size),
+                )
+                return {"items": cursor.fetchall(), "total": total,
+                        "page": page, "page_size": page_size}
+    except Exception as exc:
+        raise JobStorageError("Unable to read jobs") from exc
 
 
 def save_jobs(jobs: list[dict]):
