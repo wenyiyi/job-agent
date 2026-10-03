@@ -1,8 +1,33 @@
 # job-agent
 
-A LangChain-based agent for finding remote jobs, exposed through a FastAPI HTTP API.
+A LangGraph agent for finding remote jobs, exposed through FastAPI with a React frontend.
 
 ## Run Locally
+
+### Start everything with Docker Compose
+
+Create `.env` from `.env.example` if needed and configure `GOOGLE_API_KEY`.
+Then start all services (or run the entire `compose.yaml` in PyCharm):
+
+```bash
+docker compose up -d --build
+```
+
+Open http://127.0.0.1:8000/ for the React page and
+http://127.0.0.1:8000/docs for API documentation.
+The image builds React automatically and runs FastAPI after PostgreSQL is healthy.
+The web container uses `postgres:5432`; local tools use `localhost:5433`.
+Select all services when launching Compose in PyCharm; selecting only `postgres`
+starts only the database. Run the build command again after changing code.
+
+```bash
+docker compose logs -f web
+docker compose down
+```
+
+Stopping with `down` preserves the database volume.
+
+### Run without a web container
 
 Activate your virtual environment, then run the following commands from the project root:
 
@@ -24,7 +49,7 @@ docker compose up -d postgres
 Add the following to your existing `.env` file; see `.env.example` for a template:
 
 ```dotenv
-DATABASE_URL=postgresql://job_agent:job_agent_local@localhost:5432/job_agent
+DATABASE_URL=postgresql://job_agent:job_agent_local@localhost:5433/job_agent
 ```
 
 These credentials are for local development only. For an existing PostgreSQL
@@ -56,7 +81,28 @@ Open http://127.0.0.1:8000/ after starting PostgreSQL and FastAPI.
 The responsive jobs page supports title/company search, pagination, job details,
 and links to the original application pages. Use **Refresh** to load newly saved
 jobs. Browsing only reads saved records; it does not trigger an agent search.
-The frontend is served by FastAPI and requires no Node.js build or separate server.
+The React frontend uses Vite (Node.js 20.19+ or 22.12+). Build it before opening
+the FastAPI homepage:
+
+```bash
+cd frontend
+npm ci
+npm run build
+```
+
+FastAPI serves `frontend/dist` at `/` and its generated assets at `/assets`.
+For development, run `npm run dev` in `frontend` and open the URL printed by
+Vite. Its `/api` proxy forwards requests to FastAPI at `127.0.0.1:8000`.
+The page also accepts natural-language Agent queries and refreshes the saved
+jobs after each query completes.
+The interface defaults to English and supports Chinese using the language
+selector in the header. The selection is saved in the browser. Job descriptions
+and agent responses retain their original language.
+
+The backend explicitly compiles a LangGraph `MessagesState` graph:
+`START → agent → tools → agent`, ending when the model has no tool calls.
+The system prompt is supplied on each model invocation. Tool errors propagate
+to the API, and execution is capped at 25 graph steps.
 
 The underlying read endpoint is `GET /api/jobs?q=backend&page=1&page_size=20`.
 It returns `items`, `total`, `page`, and `page_size`, ordered by latest update.

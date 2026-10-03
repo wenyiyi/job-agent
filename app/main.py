@@ -20,12 +20,14 @@ async def lifespan(app: FastAPI):
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="Job Agent API", lifespan=lifespan)
-static_dir = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+static_dir = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+app.mount("/assets", StaticFiles(directory=static_dir / "assets", check_dir=False), name="assets")
 
 
 @app.get("/", include_in_schema=False)
 def home():
+    if not (static_dir / "index.html").is_file():
+        raise HTTPException(status_code=503, detail="请先在 frontend 目录运行 npm ci && npm run build，或使用 Vite 开发服务器。")
     return FileResponse(static_dir / "index.html")
 
 
