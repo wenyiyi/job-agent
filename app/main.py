@@ -27,7 +27,7 @@ app.mount("/assets", StaticFiles(directory=static_dir / "assets", check_dir=Fals
 @app.get("/", include_in_schema=False)
 def home():
     if not (static_dir / "index.html").is_file():
-        raise HTTPException(status_code=503, detail="请先在 frontend 目录运行 npm ci && npm run build，或使用 Vite 开发服务器。")
+        raise HTTPException(status_code=503, detail="Run npm ci && npm run build in frontend, or use the Vite development server.")
     return FileResponse(static_dir / "index.html")
 
 
@@ -39,7 +39,7 @@ def saved_jobs(q: str = Query("", max_length=200),
         return list_jobs(q.strip(), page, page_size)
     except JobStorageError as exc:
         logger.error("Unable to read saved jobs")
-        raise HTTPException(status_code=503, detail="暂时无法读取岗位，请稍后重试。") from exc
+        raise HTTPException(status_code=503, detail="Unable to read jobs. Please try again later.") from exc
 
 
 class AgentRequest(BaseModel):
@@ -79,5 +79,5 @@ def query_agent(request: AgentRequest) -> AgentResponse:
         # Do not expose upstream errors, credentials or prompts in the response.
         logger.error("Agent request failed (%s)", type(exc).__name__)
         raise HTTPException(
-            status_code=502, detail="Agent 暂时无法完成请求，请稍后重试。"
+            status_code=502, detail="Unable to complete the agent request. Please try again later."
         ) from exc

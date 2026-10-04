@@ -95,9 +95,9 @@ For development, run `npm run dev` in `frontend` and open the URL printed by
 Vite. Its `/api` proxy forwards requests to FastAPI at `127.0.0.1:8000`.
 The page also accepts natural-language Agent queries and refreshes the saved
 jobs after each query completes.
-The interface defaults to English and supports Chinese using the language
-selector in the header. The selection is saved in the browser. Job descriptions
-and agent responses retain their original language.
+The interface uses English. UI messages are centralized in `frontend/src/i18n.js`
+for future translations. Job descriptions and agent responses retain their
+original language.
 
 The backend explicitly compiles a LangGraph `MessagesState` graph:
 `START → agent → tools → agent`, ending when the model has no tool calls.

@@ -16,7 +16,8 @@ class JobStorageError(RuntimeError):
 
 
 def connect():
-    # 加载 .env 后读取连接配置；限制连接等待时间，避免数据库不可用时请求长时间挂起。
+    # Load .env before reading connection settings; bound the connection wait
+    # so requests do not hang when the database is unavailable.
     init_config()
     url = os.getenv("DATABASE_URL")
     if not url:
@@ -25,9 +26,11 @@ def connect():
 
 
 def init_database():
-    # 启动时按需建表；连接上下文正常退出会提交事务，异常退出会回滚并关闭连接。
-    # source 区分数据来源，source_key 标识来源中的岗位，两者共同约束唯一性。
-    # raw_data 保留完整供应商数据；first_seen_at 记录首次入库，last_seen_at 记录最近收录。
+    # Create the table at startup if needed. The connection context commits on
+    # success, rolls back on failure, and closes the connection in either case.
+    # Together, source and source_key uniquely identify a job from a provider.
+    # raw_data preserves the full provider payload; first_seen_at and
+    # last_seen_at track the first and most recent times the job was saved.
     with connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS jobs (
@@ -46,33 +49,38 @@ def init_database():
 
 
 def job_key(job: dict) -> str:
-    # 按优先级选取供应商标识；键中保留字段名，避免不同字段的相同值互相碰撞。
+    # Select the first available provider identifier in priority order.
+    # Include the field name to prevent equal values in different fields colliding.
     for field in ("id", "guid", "slug", "applicationLink"):
         value = job.get(field)
         if value is not None and str(value).strip():
             return f"{field}:{value}"
-    # 没有可用标识时，对完整数据取哈希，避免仅凭标题和公司误合并不同岗位。
-    # 排序键使字段顺序不影响哈希；此兜底策略下，数据内容改变会产生新记录。
+    # Without an identifier, hash the full payload to avoid merging distinct
+    # jobs that share a title and company. Sorted keys make field order irrelevant;
+    # changes to the payload create a new record under this fallback strategy.
     payload = json.dumps(job, sort_keys=True, ensure_ascii=False)
     return "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
 
 
 def list_jobs(query: str = "", page: int = 1, page_size: int = 20) -> dict:
-    # 转义 LIKE 的特殊字符，使用户输入的 %、_ 和反斜杠按字面匹配。
-    # 外层 % 实现包含搜索；ILIKE 忽略大小写，COALESCE 将空字段视为空字符串。
+    # Escape LIKE metacharacters so %, _, and backslashes match literally.
+    # Surrounding % enables substring search; ILIKE ignores case and COALESCE
+    # treats NULL fields as empty strings.
     pattern = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
     where = "WHERE COALESCE(title, '') ILIKE %s OR COALESCE(company, '') ILIKE %s"
     try:
         with connect() as conn:
             with conn.cursor(row_factory=dict_row) as cursor:
-                # 总数和分页查询使用同一数据库快照，避免并发写入使两次查询结果不一致。
-                # dict_row 将每行转为字典，便于 API 按字段名返回 JSON。
+                # Use one snapshot for the count and page queries so concurrent
+                # writes cannot make their results inconsistent. dict_row returns
+                # dictionaries that the API can serialize with named JSON fields.
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
                 cursor.execute("SELECT COUNT(*) AS total FROM jobs " + where,
                                (pattern, pattern))
                 total = cursor.fetchone()["total"]
-                # 更新时间相同时按唯一 id 排序，保证同一快照内分页顺序稳定。
-                # 页码从 1 开始；查询值、条数和偏移量都通过参数绑定传入 SQL。
+                # Break timestamp ties with the unique id for stable pagination
+                # within a snapshot. Pages start at 1; bind search values, limits,
+                # and offsets as SQL parameters.
                 cursor.execute(
                     "SELECT id, title, company, apply_url, source, raw_data, last_seen_at "
                     "FROM jobs " + where +
@@ -82,20 +90,23 @@ def list_jobs(query: str = "", page: int = 1, page_size: int = 20) -> dict:
                 return {"items": cursor.fetchall(), "total": total,
                         "page": page, "page_size": page_size}
     except Exception as exc:
-        # 统一数据库异常类型，供 API 映射为 503；保留原始异常链用于定位问题。
+        # Wrap database errors for the API's 503 response while preserving
+        # the original exception chain for debugging.
         raise JobStorageError("Unable to read jobs") from exc
 
 
 def save_jobs(jobs: list[dict]):
-    # 空结果无需建立数据库连接。
+    # Empty results require no database connection.
     if not jobs:
         return
     try:
         with connect() as conn:
             with conn.cursor() as cursor:
-                # 整批岗位在同一事务中保存：全部成功才提交，任意一条失败就回滚整批。
-                # 唯一键冲突时更新岗位内容和最近收录时间，保留首次入库时间。
-                # EXCLUDED 代表本次尝试插入的数据；Jsonb 将原始字典适配为 JSONB。
+                # Save the entire batch in one transaction: commit only if every
+                # write succeeds, otherwise roll back the whole batch.
+                # On a unique-key conflict, update job data and last_seen_at
+                # while preserving first_seen_at. EXCLUDED holds the proposed
+                # insert values; Jsonb adapts the original dictionary to JSONB.
                 cursor.executemany("""
                     INSERT INTO jobs
                         (source, source_key, title, company, apply_url, raw_data)
@@ -112,5 +123,6 @@ def save_jobs(jobs: list[dict]):
                     for job in jobs
                 ])
     except Exception as exc:
-        # 将存储失败传递给 Agent/API，避免返回成功却没有保存岗位的结果。
+        # Propagate storage failures to the agent/API so a search cannot report
+        # success when its jobs were not saved.
         raise JobStorageError("Unable to save jobs") from exc
